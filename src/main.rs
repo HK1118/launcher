@@ -325,7 +325,7 @@ impl LauncherApp {
     }
 
     fn add_paths(&mut self, paths: &[PathBuf]) {
-        let allowed = ["exe", "lnk"];
+        let allowed = ["exe", "lnk", "html", "htm"];
         let mut added = false;
 
         for path in paths {
@@ -375,8 +375,23 @@ impl LauncherApp {
 
     fn launch(&mut self, path_str: &str) {
         let target_path = Path::new(path_str);
-        let mut cmd = std::process::Command::new(target_path);
+        let ext = target_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
 
+        let mut cmd = if ext == "html" || ext == "htm" {
+            // HTMLファイルの場合は、既定のブラウザで開く
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/c", "start", "", path_str]);
+            c
+        } else {
+            // 通常の exe やショートカット
+            std::process::Command::new(target_path)
+        };
+
+        // 作業ディレクトリをファイルのあるフォルダに設定（画像や音楽、JSなどの相対パスを正しく読み込ませるため）
         if let Some(parent) = target_path.parent()
             && parent.exists()
             && parent.is_dir()
@@ -476,7 +491,7 @@ impl eframe::App for LauncherApp {
 
                             if ui.add_sized(egui::vec2(80.0, 30.0), add_btn).clicked()
                                 && let Some(files) = FileDialog::new()
-                                    .add_filter("実行可能ファイル", &["exe", "lnk"])
+                                    .add_filter("ゲーム・アプリ", &["exe", "lnk", "html", "htm"])
                                     .pick_files()
                             {
                                 self.add_paths(&files);
