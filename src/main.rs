@@ -46,7 +46,6 @@ const IID_IPERSIST_FILE: Guid = Guid {
     data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
 };
 
-// Rust 2024 Edition 準拠 (unsafe extern)
 #[link(name = "ole32")]
 unsafe extern "system" {
     fn CoInitializeEx(pvReserved: *mut std::ffi::c_void, dwCoInit: u32) -> Hresult;
@@ -216,12 +215,15 @@ fn get_data_path(file_name: &str) -> PathBuf {
     }
 }
 
-fn load_apps() -> Vec<SavedApp> {
+// 改善点1: パースエラーを Result で返し、具体的なエラー原因を把握できるようにする
+fn load_apps() -> Result<Vec<SavedApp>, String> {
     let path = get_data_path("apps.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("apps.json の読み込み失敗: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("apps.json 構文エラー ({})", e))
 }
 
 fn save_apps(apps: &[SavedApp]) {
@@ -314,10 +316,16 @@ impl LauncherApp {
             let _ = w.watch(&watch_dir, notify::RecursiveMode::NonRecursive);
         }
 
+        // 初期読み込み時のエラーハンドリング
+        let (apps, toast) = match load_apps() {
+            Ok(apps) => (apps, None),
+            Err(err) => (Vec::new(), Some((err, Instant::now()))),
+        };
+
         Self {
-            apps: load_apps(),
+            apps,
             settings: load_settings(),
-            toast: None,
+            toast,
             file_receiver: rx,
             _watcher: watcher,
             editing_name: None,
@@ -382,16 +390,13 @@ impl LauncherApp {
             .unwrap_or_default();
 
         let mut cmd = if ext == "html" || ext == "htm" {
-            // HTMLファイルの場合は、既定のブラウザで開く
             let mut c = std::process::Command::new("cmd");
             c.args(["/c", "start", "", path_str]);
             c
         } else {
-            // 通常の exe やショートカット
             std::process::Command::new(target_path)
         };
 
-        // 作業ディレクトリをファイルのあるフォルダに設定（画像や音楽、JSなどの相対パスを正しく読み込ませるため）
         if let Some(parent) = target_path.parent()
             && parent.exists()
             && parent.is_dir()
@@ -435,16 +440,21 @@ impl LauncherApp {
 // eframe 0.36 App トレイト
 impl eframe::App for LauncherApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // ダークモードを完全に遮断し、ライトテーマを常時適用
         let mut visuals = egui::Visuals::light();
         visuals.panel_fill = egui::Color32::from_rgb(247, 250, 252);
         ui.ctx().set_visuals(visuals);
 
-        // ホットリロードの反映
+        // ホットリロード時の処理: エラー時は以前のデータを保持しトースト通知
         if self.file_receiver.try_recv().is_ok() {
-            let loaded = load_apps();
-            if loaded != self.apps {
-                self.apps = loaded;
+            match load_apps() {
+                Ok(loaded) => {
+                    if loaded != self.apps {
+                        self.apps = loaded;
+                    }
+                }
+                Err(err) => {
+                    self.toast = Some((err, Instant::now()));
+                }
             }
         }
 
@@ -462,7 +472,6 @@ impl eframe::App for LauncherApp {
             }
         });
 
-        // 背景全面パネル (#f7fafc)
         let panel_frame = egui::Frame::new()
             .fill(egui::Color32::from_rgb(247, 250, 252))
             .inner_margin(egui::Margin::symmetric(20, 16));
@@ -502,7 +511,7 @@ impl eframe::App for LauncherApp {
 
                 ui.add_space(10.0);
 
-                // 黒いセパレーター（区切り線）
+                // 区切り線
                 let sep_stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
                 let (sep_rect, _) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 1.0),
@@ -517,6 +526,8 @@ impl eframe::App for LauncherApp {
                 let mut app_to_launch = None;
                 let mut app_to_delete = None;
                 let mut app_to_rename = None;
+                let mut app_to_move_up = None;
+                let mut app_to_move_down = None;
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
@@ -528,13 +539,13 @@ impl eframe::App for LauncherApp {
                             let available_w = ui.available_width();
                             let desired_size = egui::vec2(available_w, card_height);
 
-                            // 1. カード全体の領域を確保
                             let (card_rect, card_response) =
                                 ui.allocate_exact_size(desired_size, egui::Sense::click());
 
-                            // 2. ボタン領域の計算 (削除 + 名前変更)
-                            let del_btn_size = egui::vec2(60.0, 28.0);
-                            let rename_btn_size = egui::vec2(72.0, 28.0);
+                            // ボタン領域の計算 (削除 + 名前変更 + ▼ + ▲)
+                            let del_btn_size = egui::vec2(54.0, 28.0);
+                            let rename_btn_size = egui::vec2(66.0, 28.0);
+                            let arrow_btn_size = egui::vec2(28.0, 28.0);
 
                             let del_rect = egui::Rect::from_center_size(
                                 egui::pos2(
@@ -545,10 +556,24 @@ impl eframe::App for LauncherApp {
                             );
                             let rename_rect = egui::Rect::from_center_size(
                                 egui::pos2(
-                                    del_rect.left() - 8.0 - rename_btn_size.x * 0.5,
+                                    del_rect.left() - 6.0 - rename_btn_size.x * 0.5,
                                     card_rect.center().y,
                                 ),
                                 rename_btn_size,
+                            );
+                            let down_rect = egui::Rect::from_center_size(
+                                egui::pos2(
+                                    rename_rect.left() - 6.0 - arrow_btn_size.x * 0.5,
+                                    card_rect.center().y,
+                                ),
+                                arrow_btn_size,
+                            );
+                            let up_rect = egui::Rect::from_center_size(
+                                egui::pos2(
+                                    down_rect.left() - 4.0 - arrow_btn_size.x * 0.5,
+                                    card_rect.center().y,
+                                ),
+                                arrow_btn_size,
                             );
 
                             let is_hovering_del = if self.settings.show_edit_buttons {
@@ -561,14 +586,26 @@ impl eframe::App for LauncherApp {
                             } else {
                                 false
                             };
-                            let is_hovering_action = is_hovering_del || is_hovering_rename;
+                            let is_hovering_down = if self.settings.show_edit_buttons {
+                                ui.rect_contains_pointer(down_rect)
+                            } else {
+                                false
+                            };
+                            let is_hovering_up = if self.settings.show_edit_buttons {
+                                ui.rect_contains_pointer(up_rect)
+                            } else {
+                                false
+                            };
+                            let is_hovering_action = is_hovering_del
+                                || is_hovering_rename
+                                || is_hovering_down
+                                || is_hovering_up;
 
-                            // 3. カード本体のホバー・押下判定
+                            // カード本体のホバー・押下判定
                             let is_card_hovered = card_response.hovered() && !is_hovering_action;
                             let is_card_pressed =
                                 card_response.is_pointer_button_down_on() && !is_hovering_action;
 
-                            // 4. 背景色・枠線色
                             let (bg_color, stroke_color) = if is_card_pressed {
                                 (
                                     egui::Color32::from_rgb(226, 232, 240),
@@ -595,9 +632,9 @@ impl eframe::App for LauncherApp {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
 
-                            // 5. テキスト描画 (Painter直描きのため文字選択カーソルが出ず、全域クリック可能)
+                            // テキスト描画（ボタンが増えた分、幅を調整）
                             let buttons_width = if self.settings.show_edit_buttons {
-                                170.0
+                                220.0
                             } else {
                                 32.0
                             };
@@ -651,9 +688,123 @@ impl eframe::App for LauncherApp {
                                 egui::Color32::from_rgb(113, 128, 150),
                             );
 
-                            // 6. 各種操作ボタン
+                            // 各種操作ボタン
                             if self.settings.show_edit_buttons {
-                                // 名前変更ボタン
+                                // ----------------- ▲ (上へ移動) ボタン -----------------
+                                let can_move_up = idx > 0;
+                                let up_resp = ui.interact(
+                                    up_rect,
+                                    ui.id().with(("up_btn", idx)),
+                                    if can_move_up {
+                                        egui::Sense::click()
+                                    } else {
+                                        egui::Sense::hover()
+                                    },
+                                );
+
+                                let (up_bg, up_fg) = if !can_move_up {
+                                    (
+                                        egui::Color32::from_rgb(247, 250, 252),
+                                        egui::Color32::from_rgb(203, 213, 225),
+                                    )
+                                } else if up_resp.is_pointer_button_down_on() {
+                                    (
+                                        egui::Color32::from_rgb(203, 213, 225),
+                                        egui::Color32::from_rgb(45, 55, 72),
+                                    )
+                                } else if up_resp.hovered() {
+                                    (
+                                        egui::Color32::from_rgb(226, 232, 240),
+                                        egui::Color32::from_rgb(45, 55, 72),
+                                    )
+                                } else {
+                                    (
+                                        egui::Color32::from_rgb(237, 242, 247),
+                                        egui::Color32::from_rgb(74, 85, 104),
+                                    )
+                                };
+
+                                if can_move_up && up_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+
+                                ui.painter().rect(
+                                    up_rect,
+                                    4.0,
+                                    up_bg,
+                                    egui::Stroke::new(1.0, egui::Color32::from_rgb(226, 232, 240)),
+                                    egui::StrokeKind::Inside,
+                                );
+                                ui.painter().text(
+                                    up_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "▲",
+                                    egui::FontId::proportional(11.0),
+                                    up_fg,
+                                );
+
+                                if can_move_up && up_resp.clicked() {
+                                    app_to_move_up = Some(idx);
+                                }
+
+                                // ----------------- ▼ (下へ移動) ボタン -----------------
+                                let can_move_down = idx + 1 < self.apps.len();
+                                let down_resp = ui.interact(
+                                    down_rect,
+                                    ui.id().with(("down_btn", idx)),
+                                    if can_move_down {
+                                        egui::Sense::click()
+                                    } else {
+                                        egui::Sense::hover()
+                                    },
+                                );
+
+                                let (down_bg, down_fg) = if !can_move_down {
+                                    (
+                                        egui::Color32::from_rgb(247, 250, 252),
+                                        egui::Color32::from_rgb(203, 213, 225),
+                                    )
+                                } else if down_resp.is_pointer_button_down_on() {
+                                    (
+                                        egui::Color32::from_rgb(203, 213, 225),
+                                        egui::Color32::from_rgb(45, 55, 72),
+                                    )
+                                } else if down_resp.hovered() {
+                                    (
+                                        egui::Color32::from_rgb(226, 232, 240),
+                                        egui::Color32::from_rgb(45, 55, 72),
+                                    )
+                                } else {
+                                    (
+                                        egui::Color32::from_rgb(237, 242, 247),
+                                        egui::Color32::from_rgb(74, 85, 104),
+                                    )
+                                };
+
+                                if can_move_down && down_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+
+                                ui.painter().rect(
+                                    down_rect,
+                                    4.0,
+                                    down_bg,
+                                    egui::Stroke::new(1.0, egui::Color32::from_rgb(226, 232, 240)),
+                                    egui::StrokeKind::Inside,
+                                );
+                                ui.painter().text(
+                                    down_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "▼",
+                                    egui::FontId::proportional(11.0),
+                                    down_fg,
+                                );
+
+                                if can_move_down && down_resp.clicked() {
+                                    app_to_move_down = Some(idx);
+                                }
+
+                                // ----------------- 名前変更ボタン -----------------
                                 let rename_resp = ui.interact(
                                     rename_rect,
                                     ui.id().with(("rename_btn", idx)),
@@ -690,7 +841,7 @@ impl eframe::App for LauncherApp {
                                     app_to_rename = Some((idx, app.name.clone()));
                                 }
 
-                                // 削除ボタン
+                                // ----------------- 削除ボタン -----------------
                                 let del_resp = ui.interact(
                                     del_rect,
                                     ui.id().with(("del_btn", idx)),
@@ -728,13 +879,14 @@ impl eframe::App for LauncherApp {
                                 }
                             }
 
-                            // 7. カードクリックでアプリ起動
+                            // カードクリックでアプリ起動
                             if card_response.clicked() && !is_hovering_action {
                                 app_to_launch = Some(app.path.clone());
                             }
                         }
                     });
 
+                // アクションの実行
                 if let Some(path) = app_to_launch {
                     self.launch(&path);
                 }
@@ -744,9 +896,24 @@ impl eframe::App for LauncherApp {
                 if let Some((idx, current_name)) = app_to_rename {
                     self.editing_name = Some((idx, current_name));
                 }
+                // 並び替えの処理と保存
+                if let Some(idx) = app_to_move_up
+                    && idx > 0
+                    && idx < self.apps.len()
+                {
+                    self.apps.swap(idx, idx - 1);
+                    save_apps(&self.apps);
+                }
+
+                if let Some(idx) = app_to_move_down
+                    && idx + 1 < self.apps.len()
+                {
+                    self.apps.swap(idx, idx + 1);
+                    save_apps(&self.apps);
+                }
             });
 
-        // 名前変更モーダルダイアログ
+        // 名前変更モーダル
         if let Some((idx, ref mut name_buf)) = self.editing_name {
             let mut save_clicked = false;
             let mut close_clicked = false;
@@ -807,9 +974,9 @@ impl eframe::App for LauncherApp {
             }
         }
 
-        // トースト通知
+        // トースト通知（エラーメッセージや起動エラーの通知）
         if let Some((ref msg, start_time)) = self.toast {
-            if start_time.elapsed() > Duration::from_secs(5) {
+            if start_time.elapsed() > Duration::from_secs(6) {
                 self.toast = None;
             } else {
                 let msg_clone = msg.clone();
@@ -846,15 +1013,20 @@ impl eframe::App for LauncherApp {
     }
 }
 
-// ============================================================================
-// エントリーポイント
-// ============================================================================
 fn main() -> eframe::Result<()> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).ok();
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([580.0, 450.0])
+        .with_min_inner_size([450.0, 300.0])
+        .with_title("Game Launcher");
+
+    if let Some(icon_data) = icon {
+        viewport = viewport.with_icon(icon_data);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([550.0, 450.0])
-            .with_min_inner_size([400.0, 300.0])
-            .with_title("Game Launcher"),
+        viewport,
         ..Default::default()
     };
 
