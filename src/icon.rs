@@ -298,7 +298,8 @@ pub fn extract_icon_image(path: &str) -> Option<egui::ColorImage> {
         );
 
         if himl != 0 {
-            let h_icon = ImageList_GetIcon(HIMAGELIST(himl as isize), shfi.iIcon, ILD_NORMAL);
+            let icon_index = shfi.iIcon; // コピーして安全に渡す
+            let h_icon = ImageList_GetIcon(HIMAGELIST(himl as isize), icon_index, ILD_NORMAL);
             if !h_icon.is_invalid()
                 && let Some(img) = hicon_to_color_image(h_icon)
             {
@@ -317,8 +318,9 @@ pub fn extract_icon_image(path: &str) -> Option<egui::ColorImage> {
             SHGFI_ICON | SHGFI_LARGEICON,
         );
 
-        if res != 0 && !shfi_direct.hIcon.is_invalid() {
-            return hicon_to_color_image(shfi_direct.hIcon);
+        let direct_hicon = shfi_direct.hIcon;
+        if res != 0 && !direct_hicon.is_invalid() {
+            return hicon_to_color_image(direct_hicon);
         }
     }
 

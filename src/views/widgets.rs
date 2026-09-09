@@ -157,8 +157,8 @@ pub fn render_toast(app: &mut LauncherApp, ctx: &egui::Context) {
 
     let msg_clone = msg.clone();
     let (tag, bg, fg) = match kind {
-        ToastKind::Info => ("INFO", theme::TOAST_INFO_BG, egui::Color32::WHITE),
-        ToastKind::Error => ("WARN", theme::TOAST_WARN_BG, egui::Color32::WHITE),
+        ToastKind::Info => ("INFO:", theme::TOAST_INFO_BG, egui::Color32::WHITE),
+        ToastKind::Error => ("WARN:", theme::TOAST_WARN_BG, egui::Color32::WHITE),
     };
 
     egui::Area::new(egui::Id::new("toast_notification"))
