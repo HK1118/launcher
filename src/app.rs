@@ -252,6 +252,38 @@ impl LauncherApp {
         self.file_existence.remove(&removed.path);
         save_apps(&self.apps);
     }
+
+    fn open_location(&mut self, path_str: &str) {
+        let target = Path::new(path_str);
+        if target.exists() {
+            if let Err(e) = std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{}\"", target.to_string_lossy()))
+                .spawn()
+            {
+                self.toast = Some((
+                    format!("エクスプローラーの起動に失敗しました: {}", e),
+                    ToastKind::Error,
+                    Instant::now(),
+                ));
+            }
+        } else if let Some(parent) = target.parent()
+            && parent.exists()
+        {
+            if let Err(e) = std::process::Command::new("explorer").arg(parent).spawn() {
+                self.toast = Some((
+                    format!("エクスプローラーの起動に失敗しました: {}", e),
+                    ToastKind::Error,
+                    Instant::now(),
+                ));
+            }
+        } else {
+            self.toast = Some((
+                format!("保存場所が見つかりません:\n{}", path_str),
+                ToastKind::Error,
+                Instant::now(),
+            ));
+        }
+    }
 }
 
 fn custom_button(
@@ -400,7 +432,10 @@ impl eframe::App for LauncherApp {
                             .fill(egui::Color32::from_rgb(72, 187, 120))
                             .corner_radius(4.0);
 
-                            if ui.add_sized(egui::vec2(80.0, 30.0), add_btn).clicked()
+                            if ui
+                                .add_sized(egui::vec2(80.0, 30.0), add_btn)
+                                .on_hover_text("ゲームやアプリを追加 (exe, lnk, url, html)")
+                                .clicked()
                                 && let Some(files) = FileDialog::new()
                                     .add_filter(
                                         "ゲーム・アプリ",
@@ -430,6 +465,7 @@ impl eframe::App for LauncherApp {
                 let mut app_to_warn_missing = None;
                 let mut app_to_delete = None;
                 let mut app_to_rename = None;
+                let mut app_to_open_location = None;
                 let mut app_to_move_up = None;
                 let mut app_to_move_down = None;
 
@@ -454,6 +490,7 @@ impl eframe::App for LauncherApp {
 
                             let del_btn_size = egui::vec2(54.0, 28.0);
                             let rename_btn_size = egui::vec2(66.0, 28.0);
+                            let location_btn_size = egui::vec2(48.0, 28.0);
                             let arrow_btn_size = egui::vec2(28.0, 28.0);
 
                             let del_rect = egui::Rect::from_center_size(
@@ -470,9 +507,16 @@ impl eframe::App for LauncherApp {
                                 ),
                                 rename_btn_size,
                             );
+                            let location_rect = egui::Rect::from_center_size(
+                                egui::pos2(
+                                    rename_rect.left() - 6.0 - location_btn_size.x * 0.5,
+                                    card_rect.center().y,
+                                ),
+                                location_btn_size,
+                            );
                             let down_rect = egui::Rect::from_center_size(
                                 egui::pos2(
-                                    rename_rect.left() - 6.0 - arrow_btn_size.x * 0.5,
+                                    location_rect.left() - 6.0 - arrow_btn_size.x * 0.5,
                                     card_rect.center().y,
                                 ),
                                 arrow_btn_size,
@@ -488,6 +532,7 @@ impl eframe::App for LauncherApp {
                             let is_hovering_action = self.settings.show_edit_buttons
                                 && (ui.rect_contains_pointer(del_rect)
                                     || ui.rect_contains_pointer(rename_rect)
+                                    || ui.rect_contains_pointer(location_rect)
                                     || ui.rect_contains_pointer(down_rect)
                                     || ui.rect_contains_pointer(up_rect));
 
@@ -594,7 +639,7 @@ impl eframe::App for LauncherApp {
 
                             // テキスト描画
                             let buttons_width = if self.settings.show_edit_buttons {
-                                220.0
+                                275.0
                             } else {
                                 32.0
                             };
@@ -680,6 +725,11 @@ impl eframe::App for LauncherApp {
                                     egui::Color32::from_rgb(74, 85, 104),
                                     can_move_up,
                                 )
+                                .on_hover_text(if can_move_up {
+                                    "上へ移動"
+                                } else {
+                                    "先頭です"
+                                })
                                 .clicked()
                                     && can_move_up
                                 {
@@ -696,10 +746,30 @@ impl eframe::App for LauncherApp {
                                     egui::Color32::from_rgb(74, 85, 104),
                                     can_move_down,
                                 )
+                                .on_hover_text(if can_move_down {
+                                    "下へ移動"
+                                } else {
+                                    "末尾です"
+                                })
                                 .clicked()
                                     && can_move_down
                                 {
                                     app_to_move_down = Some(idx);
+                                }
+
+                                if custom_button(
+                                    ui,
+                                    location_rect,
+                                    ui.id().with(("location_btn", idx)),
+                                    "場所",
+                                    egui::Color32::from_rgb(237, 242, 247),
+                                    egui::Color32::from_rgb(74, 85, 104),
+                                    true,
+                                )
+                                .on_hover_text("ファイルの保存場所を開く")
+                                .clicked()
+                                {
+                                    app_to_open_location = Some(app.path.clone());
                                 }
 
                                 if custom_button(
@@ -711,6 +781,7 @@ impl eframe::App for LauncherApp {
                                     egui::Color32::WHITE,
                                     true,
                                 )
+                                .on_hover_text("登録名を変更")
                                 .clicked()
                                 {
                                     app_to_rename = Some((idx, app.name.clone()));
@@ -725,6 +796,7 @@ impl eframe::App for LauncherApp {
                                     egui::Color32::WHITE,
                                     true,
                                 )
+                                .on_hover_text("一覧から削除")
                                 .clicked()
                                 {
                                     app_to_delete = Some(idx);
@@ -742,6 +814,9 @@ impl eframe::App for LauncherApp {
                         }
                     });
 
+                if let Some(path) = app_to_open_location {
+                    self.open_location(&path);
+                }
                 if let Some((name, path)) = app_to_warn_missing {
                     self.toast = Some((
                         format!("「{}」のファイルが見つかりません:\n{}", name, path),
@@ -806,6 +881,7 @@ impl eframe::App for LauncherApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .add_sized(egui::vec2(70.0, 28.0), egui::Button::new("保存"))
+                                .on_hover_text("変更を保存 (Enter)")
                                 .clicked()
                             {
                                 save_clicked = true;
@@ -813,6 +889,7 @@ impl eframe::App for LauncherApp {
                             ui.add_space(8.0);
                             if ui
                                 .add_sized(egui::vec2(70.0, 28.0), egui::Button::new("キャンセル"))
+                                .on_hover_text("変更を破棄して閉じる (Esc)")
                                 .clicked()
                             {
                                 close_clicked = true;
