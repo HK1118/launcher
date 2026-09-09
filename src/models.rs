@@ -10,7 +10,8 @@ pub struct SavedApp {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
     pub confirm_on_delete: bool,
-    pub show_edit_buttons: bool,
+    #[serde(default, alias = "show_edit_buttons")]
+    pub edit_mode: bool,
     pub app_name_font_size: f32,
     pub app_path_font_size: f32,
     #[serde(default = "default_cooldown_secs")]
@@ -25,7 +26,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             confirm_on_delete: true,
-            show_edit_buttons: true,
+            edit_mode: false,
             app_name_font_size: 15.0,
             app_path_font_size: 12.0,
             launch_cooldown_secs: default_cooldown_secs(),
@@ -60,6 +61,13 @@ pub fn load_apps() -> Result<Vec<SavedApp>, String> {
 pub fn save_apps(apps: &[SavedApp]) {
     let path = get_data_path("apps.json");
     if let Ok(json) = serde_json::to_string_pretty(apps) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+pub fn save_settings(settings: &Settings) {
+    let path = get_data_path("settings.json");
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
         let _ = std::fs::write(path, json);
     }
 }
