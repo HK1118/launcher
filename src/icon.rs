@@ -5,165 +5,54 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-#[repr(C)]
-struct SHFILEINFOW {
-    h_icon: *mut std::ffi::c_void,
-    i_icon: i32,
-    dw_attributes: u32,
-    sz_display_name: [u16; 260],
-    sz_type_name: [u16; 80],
-}
-
-const SHGFI_ICON: u32 = 0x000000100;
-const SHGFI_SYSICONINDEX: u32 = 0x000004000;
-const SHGFI_LARGEICON: u32 = 0x000000000;
-const ILD_NORMAL: u32 = 0x00000000;
-
-#[repr(C)]
-struct ICONINFO {
-    f_icon: i32,
-    x_hotspot: u32,
-    y_hotspot: u32,
-    hbm_mask: *mut std::ffi::c_void,
-    hbm_color: *mut std::ffi::c_void,
-}
-
-#[repr(C)]
-struct BITMAP {
-    bm_type: i32,
-    bm_width: i32,
-    bm_height: i32,
-    bm_width_bytes: i32,
-    bm_planes: u16,
-    bm_bits_pixel: u16,
-    bm_bits: *mut std::ffi::c_void,
-}
-
-#[repr(C)]
-struct BITMAPINFOHEADER {
-    bi_size: u32,
-    bi_width: i32,
-    bi_height: i32,
-    bi_planes: u16,
-    bi_bit_count: u16,
-    bi_compression: u32,
-    bi_size_image: u32,
-    bi_x_pels_per_meter: i32,
-    bi_y_pels_per_meter: i32,
-    bi_clr_used: u32,
-    bi_clr_important: u32,
-}
-
-#[repr(C)]
-struct BITMAPINFO {
-    bmi_header: BITMAPINFOHEADER,
-    bmi_colors: [u32; 1],
-}
-
-#[repr(C)]
-struct Guid {
-    data1: u32,
-    data2: u16,
-    data3: u16,
-    data4: [u8; 8],
-}
-
-const CLSID_SHELL_LINK: Guid = Guid {
-    data1: 0x00021401,
-    data2: 0x0000,
-    data3: 0x0000,
-    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
+    GetObjectW, HBITMAP, HDC, HGDIOBJ, ReleaseDC,
 };
-
-const IID_ISHELL_LINK_W: Guid = Guid {
-    data1: 0x000214F9,
-    data2: 0x0000,
-    data3: 0x0000,
-    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile, STGM};
+use windows::Win32::UI::Controls::{HIMAGELIST, ILD_NORMAL, ImageList_GetIcon};
+use windows::Win32::UI::Shell::{
+    IShellLinkW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SHGetFileInfoW,
+    ShellLink,
 };
+use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
+use windows::core::{Interface, PCWSTR};
 
-const IID_IPERSIST_FILE: Guid = Guid {
-    data1: 0x0000010B,
-    data2: 0x0000,
-    data3: 0x0000,
-    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
-};
-
-#[repr(C)]
-struct IShellLinkWVtbl {
-    _qi: usize,
-    _add_ref: usize,
-    release: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
-    get_path: unsafe extern "system" fn(
-        *mut std::ffi::c_void,
-        *mut u16,
-        i32,
-        *mut std::ffi::c_void,
-        u32,
-    ) -> i32,
-    _pad1: [usize; 12],
-    get_icon_location:
-        unsafe extern "system" fn(*mut std::ffi::c_void, *mut u16, i32, *mut i32) -> i32,
+// --- RAII リソースガード（リーク防止用） ---
+struct IconGuard(HICON);
+impl Drop for IconGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = DestroyIcon(self.0);
+            }
+        }
+    }
 }
 
-#[repr(C)]
-struct IPersistFileVtbl {
-    _qi: usize,
-    _add_ref: usize,
-    release: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
-    _get_class_id: usize,
-    _is_dirty: usize,
-    load: unsafe extern "system" fn(*mut std::ffi::c_void, *const u16, u32) -> i32,
+struct BitmapGuard(HBITMAP);
+impl Drop for BitmapGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.0.0));
+            }
+        }
+    }
 }
 
-#[link(name = "ole32")]
-unsafe extern "system" {
-    fn CoCreateInstance(
-        rclsid: *const Guid,
-        pUnkOuter: *mut std::ffi::c_void,
-        dwClsContext: u32,
-        riid: *const Guid,
-        ppv: *mut *mut std::ffi::c_void,
-    ) -> i32;
+struct DcGuard {
+    hdc: HDC,
 }
-
-#[link(name = "shell32")]
-unsafe extern "system" {
-    fn SHGetFileInfoW(
-        pszPath: *const u16,
-        dwFileAttributes: u32,
-        psfi: *mut SHFILEINFOW,
-        cbFileInfo: u32,
-        uFlags: u32,
-    ) -> usize;
-}
-
-#[link(name = "comctl32")]
-unsafe extern "system" {
-    fn ImageList_GetIcon(himl: *mut std::ffi::c_void, i: i32, flags: u32) -> *mut std::ffi::c_void;
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn GetIconInfo(hIcon: *mut std::ffi::c_void, piconinfo: *mut ICONINFO) -> i32;
-    fn DestroyIcon(hIcon: *mut std::ffi::c_void) -> i32;
-    fn GetDC(hWnd: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-    fn ReleaseDC(hWnd: *mut std::ffi::c_void, hDC: *mut std::ffi::c_void) -> i32;
-}
-
-#[link(name = "gdi32")]
-unsafe extern "system" {
-    fn GetObjectW(h: *mut std::ffi::c_void, c: i32, pv: *mut std::ffi::c_void) -> i32;
-    fn GetDIBits(
-        hdc: *mut std::ffi::c_void,
-        hbm: *mut std::ffi::c_void,
-        start: u32,
-        cLines: u32,
-        lpvBits: *mut std::ffi::c_void,
-        lpbmi: *mut BITMAPINFO,
-        usage: u32,
-    ) -> i32;
-    fn DeleteObject(ho: *mut std::ffi::c_void) -> i32;
+impl Drop for DcGuard {
+    fn drop(&mut self) {
+        if !self.hdc.is_invalid() {
+            unsafe {
+                ReleaseDC(None, self.hdc);
+            }
+        }
+    }
 }
 
 fn to_wide(s: &str) -> Vec<u16> {
@@ -223,167 +112,104 @@ fn get_url_icon_path(path: &str) -> Option<String> {
 /// VALORANT等の .lnk ファイルからアイコンパスまたはリンク先を取得
 fn get_lnk_icon_path(path: &str) -> Option<String> {
     unsafe {
-        let mut shell_link: *mut std::ffi::c_void = std::ptr::null_mut();
-        if CoCreateInstance(
-            &CLSID_SHELL_LINK,
-            std::ptr::null_mut(),
-            1,
-            &IID_ISHELL_LINK_W,
-            &mut shell_link,
-        ) < 0
-            || shell_link.is_null()
-        {
-            return None;
-        }
+        let shell_link: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let persist_file: IPersistFile = shell_link.cast().ok()?;
 
-        let sl_vtbl = *(shell_link as *mut *const IShellLinkWVtbl);
-        let mut persist_file: *mut std::ffi::c_void = std::ptr::null_mut();
-        // QueryInterface
-        let hr = {
-            let qi = std::mem::transmute::<
-                usize,
-                unsafe extern "system" fn(
-                    *mut std::ffi::c_void,
-                    *const Guid,
-                    *mut *mut std::ffi::c_void,
-                ) -> i32,
-            >((*sl_vtbl)._qi);
-            qi(shell_link, &IID_IPERSIST_FILE, &mut persist_file)
-        };
-
-        if hr < 0 || persist_file.is_null() {
-            ((*sl_vtbl).release)(shell_link);
-            return None;
-        }
-
-        let pf_vtbl = *(persist_file as *mut *const IPersistFileVtbl);
         let wide_path = to_wide(path);
-        if ((*pf_vtbl).load)(persist_file, wide_path.as_ptr(), 0) < 0 {
-            ((*pf_vtbl).release)(persist_file);
-            ((*sl_vtbl).release)(shell_link);
-            return None;
-        }
+        persist_file
+            .Load(PCWSTR(wide_path.as_ptr()), STGM(0))
+            .ok()?;
 
         let mut icon_buf = [0u16; 1024];
         let mut icon_idx = 0i32;
-        let mut result = None;
 
-        if ((*sl_vtbl).get_icon_location)(shell_link, icon_buf.as_mut_ptr(), 1024, &mut icon_idx)
-            >= 0
+        if shell_link
+            .GetIconLocation(&mut icon_buf, &mut icon_idx)
+            .is_ok()
         {
             let len = icon_buf.iter().position(|&c| c == 0).unwrap_or(0);
             let icon_str = String::from_utf16_lossy(&icon_buf[..len]);
             if !icon_str.is_empty() && Path::new(&icon_str).exists() {
-                result = Some(icon_str);
+                return Some(icon_str);
             }
         }
 
-        if result.is_none() {
-            let mut target_buf = [0u16; 1024];
-            if ((*sl_vtbl).get_path)(
-                shell_link,
-                target_buf.as_mut_ptr(),
-                1024,
-                std::ptr::null_mut(),
-                0,
-            ) >= 0
-            {
-                let len = target_buf.iter().position(|&c| c == 0).unwrap_or(0);
-                let target_str = String::from_utf16_lossy(&target_buf[..len]);
-                if !target_str.is_empty() && Path::new(&target_str).exists() {
-                    result = Some(target_str);
-                }
+        let mut target_buf = [0u16; 1024];
+        if shell_link
+            .GetPath(&mut target_buf, std::ptr::null_mut(), 0)
+            .is_ok()
+        {
+            let len = target_buf.iter().position(|&c| c == 0).unwrap_or(0);
+            let target_str = String::from_utf16_lossy(&target_buf[..len]);
+            if !target_str.is_empty() && Path::new(&target_str).exists() {
+                return Some(target_str);
             }
         }
 
-        ((*pf_vtbl).release)(persist_file);
-        ((*sl_vtbl).release)(shell_link);
-        result
+        None
     }
 }
 
-unsafe fn hicon_to_color_image(h_icon: *mut std::ffi::c_void) -> Option<egui::ColorImage> {
-    unsafe {
-        let mut icon_info = ICONINFO {
-            f_icon: 0,
-            x_hotspot: 0,
-            y_hotspot: 0,
-            hbm_mask: std::ptr::null_mut(),
-            hbm_color: std::ptr::null_mut(),
-        };
+pub unsafe fn hicon_to_color_image(h_icon: HICON) -> Option<egui::ColorImage> {
+    // 関数を抜けた時に確実にアイコンを破棄
+    let _icon_guard = IconGuard(h_icon);
 
-        if GetIconInfo(h_icon, &mut icon_info) == 0 {
-            DestroyIcon(h_icon);
+    unsafe {
+        let mut icon_info = ICONINFO::default();
+        if GetIconInfo(h_icon, &mut icon_info).is_err() {
             return None;
         }
 
-        let target_bitmap = if !icon_info.hbm_color.is_null() {
-            icon_info.hbm_color
+        // ビットマップハンドルの RAII ガード
+        let _color_guard = BitmapGuard(icon_info.hbmColor);
+        let _mask_guard = BitmapGuard(icon_info.hbmMask);
+
+        let target_bitmap = if !icon_info.hbmColor.is_invalid() {
+            icon_info.hbmColor
         } else {
-            icon_info.hbm_mask
+            icon_info.hbmMask
         };
 
-        let mut bm = BITMAP {
-            bm_type: 0,
-            bm_width: 0,
-            bm_height: 0,
-            bm_width_bytes: 0,
-            bm_planes: 0,
-            bm_bits_pixel: 0,
-            bm_bits: std::ptr::null_mut(),
-        };
-
+        let mut bm = BITMAP::default();
         if GetObjectW(
-            target_bitmap,
+            HGDIOBJ(target_bitmap.0),
             std::mem::size_of::<BITMAP>() as i32,
-            &mut bm as *mut _ as *mut std::ffi::c_void,
+            Some(&mut bm as *mut _ as *mut std::ffi::c_void),
         ) == 0
         {
-            if !icon_info.hbm_color.is_null() {
-                DeleteObject(icon_info.hbm_color);
-            }
-            if !icon_info.hbm_mask.is_null() {
-                DeleteObject(icon_info.hbm_mask);
-            }
-            DestroyIcon(h_icon);
             return None;
         }
 
-        let orig_w = bm.bm_width.max(1);
-        let orig_h = if icon_info.hbm_color.is_null() {
-            (bm.bm_height / 2).max(1)
+        let orig_w = bm.bmWidth.max(1);
+        let orig_h = if icon_info.hbmColor.is_invalid() {
+            (bm.bmHeight / 2).max(1)
         } else {
-            bm.bm_height.max(1)
+            bm.bmHeight.max(1)
         };
 
-        let hdc = GetDC(std::ptr::null_mut());
-        if hdc.is_null() {
-            if !icon_info.hbm_color.is_null() {
-                DeleteObject(icon_info.hbm_color);
-            }
-            if !icon_info.hbm_mask.is_null() {
-                DeleteObject(icon_info.hbm_mask);
-            }
-            DestroyIcon(h_icon);
+        let hdc = GetDC(None);
+        if hdc.is_invalid() {
             return None;
         }
+        let _dc_guard = DcGuard { hdc };
 
         let mut pixels = vec![0u8; (orig_w * orig_h * 4) as usize];
         let mut bmi = BITMAPINFO {
-            bmi_header: BITMAPINFOHEADER {
-                bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                bi_width: orig_w,
-                bi_height: -orig_h,
-                bi_planes: 1,
-                bi_bit_count: 32,
-                bi_compression: 0,
-                bi_size_image: 0,
-                bi_x_pels_per_meter: 0,
-                bi_y_pels_per_meter: 0,
-                bi_clr_used: 0,
-                bi_clr_important: 0,
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: orig_w,
+                biHeight: -orig_h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
             },
-            bmi_colors: [0; 1],
+            bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default()],
         };
 
         let lines = GetDIBits(
@@ -391,19 +217,10 @@ unsafe fn hicon_to_color_image(h_icon: *mut std::ffi::c_void) -> Option<egui::Co
             target_bitmap,
             0,
             orig_h as u32,
-            pixels.as_mut_ptr() as *mut std::ffi::c_void,
+            Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
             &mut bmi,
-            0,
+            DIB_RGB_COLORS,
         );
-
-        ReleaseDC(std::ptr::null_mut(), hdc);
-        if !icon_info.hbm_color.is_null() {
-            DeleteObject(icon_info.hbm_color);
-        }
-        if !icon_info.hbm_mask.is_null() {
-            DeleteObject(icon_info.hbm_mask);
-        }
-        DestroyIcon(h_icon);
 
         if lines == 0 {
             return None;
@@ -470,25 +287,19 @@ pub fn extract_icon_image(path: &str) -> Option<egui::ColorImage> {
 
     // 3. 通常の矢印なしアイコン取得（exeなど）
     unsafe {
-        let mut shfi = SHFILEINFOW {
-            h_icon: std::ptr::null_mut(),
-            i_icon: 0,
-            dw_attributes: 0,
-            sz_display_name: [0; 260],
-            sz_type_name: [0; 80],
-        };
+        let mut shfi = SHFILEINFOW::default();
 
         let himl = SHGetFileInfoW(
-            wide_path.as_ptr(),
-            0,
-            &mut shfi,
+            PCWSTR(wide_path.as_ptr()),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut shfi),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_SYSICONINDEX | SHGFI_LARGEICON,
-        ) as *mut std::ffi::c_void;
+        );
 
-        if !himl.is_null() {
-            let h_icon = ImageList_GetIcon(himl, shfi.i_icon, ILD_NORMAL);
-            if !h_icon.is_null()
+        if himl != 0 {
+            let h_icon = ImageList_GetIcon(HIMAGELIST(himl as isize), shfi.iIcon, ILD_NORMAL);
+            if !h_icon.is_invalid()
                 && let Some(img) = hicon_to_color_image(h_icon)
             {
                 return Some(img);
@@ -496,24 +307,18 @@ pub fn extract_icon_image(path: &str) -> Option<egui::ColorImage> {
         }
 
         // 4. フォールバック: ショートカットそのまま（矢印付き）で確実に取得
-        let mut shfi_direct = SHFILEINFOW {
-            h_icon: std::ptr::null_mut(),
-            i_icon: 0,
-            dw_attributes: 0,
-            sz_display_name: [0; 260],
-            sz_type_name: [0; 80],
-        };
+        let mut shfi_direct = SHFILEINFOW::default();
 
         let res = SHGetFileInfoW(
-            wide_path.as_ptr(),
-            0,
-            &mut shfi_direct,
+            PCWSTR(wide_path.as_ptr()),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut shfi_direct),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_ICON | SHGFI_LARGEICON,
         );
 
-        if res != 0 && !shfi_direct.h_icon.is_null() {
-            return hicon_to_color_image(shfi_direct.h_icon);
+        if res != 0 && !shfi_direct.hIcon.is_invalid() {
+            return hicon_to_color_image(shfi_direct.hIcon);
         }
     }
 

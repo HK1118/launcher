@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct SavedApp {
@@ -48,6 +48,23 @@ pub fn get_data_path(file_name: &str) -> PathBuf {
     }
 }
 
+/// 一時ファイルに書き込んでからリネームすることで、破損を防ぐアトミック保存
+fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp_path = path.with_extension("tmp");
+
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+    }
+
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
 pub fn load_apps() -> Result<Vec<SavedApp>, String> {
     let path = get_data_path("apps.json");
     if !path.exists() {
@@ -60,16 +77,12 @@ pub fn load_apps() -> Result<Vec<SavedApp>, String> {
 
 pub fn save_apps(apps: &[SavedApp]) {
     let path = get_data_path("apps.json");
-    if let Ok(json) = serde_json::to_string_pretty(apps) {
-        let _ = std::fs::write(path, json);
-    }
+    let _ = atomic_write_json(&path, &apps);
 }
 
 pub fn save_settings(settings: &Settings) {
     let path = get_data_path("settings.json");
-    if let Ok(json) = serde_json::to_string_pretty(settings) {
-        let _ = std::fs::write(path, json);
-    }
+    let _ = atomic_write_json(&path, settings);
 }
 
 /// 設定ファイルを安全に読み込みます。構文エラー等の破損時は上書きせず警告を返します。
@@ -77,9 +90,7 @@ pub fn load_settings() -> (Settings, Option<String>) {
     let path = get_data_path("settings.json");
     if !path.exists() {
         let defaults = Settings::default();
-        if let Ok(json) = serde_json::to_string_pretty(&defaults) {
-            let _ = std::fs::write(&path, json);
-        }
+        let _ = atomic_write_json(&path, &defaults);
         return (defaults, None);
     }
 

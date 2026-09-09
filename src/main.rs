@@ -3,21 +3,31 @@
 mod app;
 mod icon;
 mod models;
+mod platform;
+mod theme;
+mod views;
 
 use app::LauncherApp;
 use eframe::egui;
+use std::path::Path;
 use std::sync::Arc;
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
+    let sys_root = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("WINDIR"))
+        .unwrap_or_else(|_| "C:\\Windows".to_string());
+    let fonts_dir = Path::new(&sys_root).join("Fonts");
+
     let font_candidates = [
-        "C:\\Windows\\Fonts\\meiryo.ttc",
-        "C:\\Windows\\Fonts\\msgothic.ttc",
-        "C:\\Windows\\Fonts\\YuGothM.ttc",
+        fonts_dir.join("meiryo.ttc"),
+        fonts_dir.join("YuGothM.ttc"),
+        fonts_dir.join("yugothm.ttc"),
+        fonts_dir.join("msgothic.ttc"),
     ];
 
-    for font_path in font_candidates {
+    for font_path in &font_candidates {
         if let Ok(font_data) = std::fs::read(font_path) {
             fonts.font_data.insert(
                 "jp_font".to_owned(),
