@@ -4,26 +4,31 @@ use std::time::Duration;
 use crate::app::{LauncherApp, ToastKind};
 use crate::theme;
 
+pub struct CustomButtonProps<'a> {
+    pub text: &'a str,
+    pub font_size: f32,
+    pub bg_color: egui::Color32,
+    pub text_color: egui::Color32,
+    pub enabled: bool,
+}
+
 pub fn custom_button(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     id: egui::Id,
-    text: &str,
-    base_bg: egui::Color32,
-    fg: egui::Color32,
-    enabled: bool,
+    props: CustomButtonProps<'_>,
 ) -> egui::Response {
     let resp = ui.interact(
         rect,
         id,
-        if enabled {
+        if props.enabled {
             egui::Sense::click()
         } else {
             egui::Sense::hover()
         },
     );
 
-    let (bg, text_color) = if !enabled {
+    let (bg, text_color) = if !props.enabled {
         (
             egui::Color32::from_rgb(247, 250, 252),
             egui::Color32::from_rgb(203, 213, 225),
@@ -31,32 +36,26 @@ pub fn custom_button(
     } else if resp.is_pointer_button_down_on() {
         (
             egui::Color32::from_rgba_premultiplied(
-                (base_bg.r() as f32 * 0.85) as u8,
-                (base_bg.g() as f32 * 0.85) as u8,
-                (base_bg.b() as f32 * 0.85) as u8,
+                (props.bg_color.r() as f32 * 0.85) as u8,
+                (props.bg_color.g() as f32 * 0.85) as u8,
+                (props.bg_color.b() as f32 * 0.85) as u8,
                 255,
             ),
-            fg,
+            props.text_color,
         )
     } else if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         (
             egui::Color32::from_rgba_premultiplied(
-                (base_bg.r() as f32 * 1.1).min(255.0) as u8,
-                (base_bg.g() as f32 * 1.1).min(255.0) as u8,
-                (base_bg.b() as f32 * 1.1).min(255.0) as u8,
+                (props.bg_color.r() as f32 * 1.1).min(255.0) as u8,
+                (props.bg_color.g() as f32 * 1.1).min(255.0) as u8,
+                (props.bg_color.b() as f32 * 1.1).min(255.0) as u8,
                 255,
             ),
-            fg,
+            props.text_color,
         )
     } else {
-        (base_bg, fg)
-    };
-
-    let font_size = if text.chars().count() == 1 {
-        11.0
-    } else {
-        12.0
+        (props.bg_color, props.text_color)
     };
 
     ui.painter().rect(
@@ -69,8 +68,8 @@ pub fn custom_button(
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(font_size),
+        props.text,
+        egui::FontId::proportional(props.font_size),
         text_color,
     );
 
@@ -89,14 +88,19 @@ pub fn render_rename_modal(app: &mut LauncherApp, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .fixed_size(egui::vec2(320.0, 120.0))
         .show(ctx, |ui| {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("新しいアプリケーション名を入力してください:").size(13.0));
+            ui.label(
+                egui::RichText::new("新しいアプリケーション名を入力してください:")
+                    .size(app.settings.ui_font_size),
+            );
             ui.add_space(8.0);
 
-            let text_resp =
-                ui.add(egui::TextEdit::singleline(name_buf).desired_width(f32::INFINITY));
+            let text_resp = ui.add(
+                egui::TextEdit::singleline(name_buf)
+                    .font(egui::FontId::proportional(app.settings.ui_font_size))
+                    .desired_width(320.0),
+            );
             if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 save_clicked = true;
             }
@@ -105,16 +109,24 @@ pub fn render_rename_modal(app: &mut LauncherApp, ctx: &egui::Context) {
 
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let save_btn = egui::Button::new(
+                        egui::RichText::new("保存").size(app.settings.button_font_size),
+                    );
                     if ui
-                        .add_sized(egui::vec2(70.0, 28.0), egui::Button::new("保存"))
+                        .add(save_btn)
                         .on_hover_text("変更を保存 (Enter)")
                         .clicked()
                     {
                         save_clicked = true;
                     }
+
                     ui.add_space(8.0);
+
+                    let cancel_btn = egui::Button::new(
+                        egui::RichText::new("キャンセル").size(app.settings.button_font_size),
+                    );
                     if ui
-                        .add_sized(egui::vec2(70.0, 28.0), egui::Button::new("キャンセル"))
+                        .add(cancel_btn)
                         .on_hover_text("変更を破棄して閉じる (Esc)")
                         .clicked()
                     {
@@ -171,11 +183,16 @@ pub fn render_toast(app: &mut LauncherApp, ctx: &egui::Context) {
 
             let resp = frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tag).color(fg).size(15.0));
+                    ui.label(
+                        egui::RichText::new(tag)
+                            .color(fg)
+                            .size(app.settings.ui_font_size + 2.0)
+                            .strong(),
+                    );
                     ui.label(
                         egui::RichText::new(&msg_clone)
                             .color(egui::Color32::WHITE)
-                            .size(13.0),
+                            .size(app.settings.ui_font_size),
                     );
                 });
             });

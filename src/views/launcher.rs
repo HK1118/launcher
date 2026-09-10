@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::app::{CurrentScreen, LauncherApp, ToastKind};
 use crate::theme;
-use crate::views::widgets::custom_button;
+use crate::views::widgets::{CustomButtonProps, custom_button};
 
 pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown: Duration) {
     // 1. ヘッダー部
@@ -12,24 +12,31 @@ pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown
         ui.heading(
             egui::RichText::new("ゲームランチャー")
                 .color(theme::TEXT_PRIMARY)
-                .size(22.0)
+                .size(app.settings.header_font_size)
                 .strong(),
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let pad_x = (app.settings.button_font_size * 0.8).max(10.0);
+            let pad_y = 6.0;
+            ui.spacing_mut().button_padding = egui::vec2(pad_x, pad_y);
+
             let (edit_label, edit_bg, edit_fg) = if app.settings.edit_mode {
                 ("完了", theme::BTN_BLUE, egui::Color32::WHITE)
             } else {
                 ("編集", theme::BTN_GRAY_BG, theme::BTN_GRAY_FG)
             };
 
-            let edit_btn =
-                egui::Button::new(egui::RichText::new(edit_label).color(edit_fg).size(13.0))
-                    .fill(edit_bg)
-                    .corner_radius(4.0);
+            let edit_btn = egui::Button::new(
+                egui::RichText::new(edit_label)
+                    .color(edit_fg)
+                    .size(app.settings.button_font_size),
+            )
+            .fill(edit_bg)
+            .corner_radius(4.0);
 
             if ui
-                .add_sized(egui::vec2(68.0, 30.0), edit_btn)
+                .add(edit_btn)
                 .on_hover_text(if app.settings.edit_mode {
                     "編集モードを終了して固定"
                 } else {
@@ -47,13 +54,13 @@ pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown
                 let settings_btn = egui::Button::new(
                     egui::RichText::new("設定")
                         .color(theme::BTN_GRAY_FG)
-                        .size(13.0),
+                        .size(app.settings.button_font_size),
                 )
                 .fill(theme::BTN_GRAY_BG)
                 .corner_radius(4.0);
 
                 if ui
-                    .add_sized(egui::vec2(60.0, 30.0), settings_btn)
+                    .add(settings_btn)
                     .on_hover_text("設定画面を開く")
                     .clicked()
                 {
@@ -65,13 +72,13 @@ pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown
                 let add_btn = egui::Button::new(
                     egui::RichText::new("+ 追加")
                         .color(egui::Color32::WHITE)
-                        .size(13.0),
+                        .size(app.settings.button_font_size),
                 )
                 .fill(theme::BTN_GREEN)
                 .corner_radius(4.0);
 
                 if ui
-                    .add_sized(egui::vec2(80.0, 30.0), add_btn)
+                    .add(add_btn)
                     .on_hover_text("ゲームやアプリを追加 (.exe, .lnk, .url, .html)")
                     .clicked()
                     && let Some(files) = FileDialog::new()
@@ -110,7 +117,7 @@ pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown
             ui.add_space(6.0);
 
             for idx in 0..app.apps.len() {
-                let (c_rect, clicked, launch_req, warn_req, del_req, rename_req, open_req) =
+                let (c_rect, _clicked, launch_req, warn_req, del_req, rename_req, open_req) =
                     render_app_card(app, ui, idx, cooldown);
 
                 card_rects.push(c_rect);
@@ -130,7 +137,6 @@ pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown
                 if let Some(r) = open_req {
                     app_to_open_location = Some(r);
                 }
-                let _ = clicked;
             }
 
             // ドラッグ中の挿入インジケーター線描画
@@ -199,7 +205,7 @@ pub fn render_launcher_screen(app: &mut LauncherApp, ui: &mut egui::Ui, cooldown
                                     ui.label(
                                         egui::RichText::new(&drag_app.name)
                                             .color(egui::Color32::WHITE)
-                                            .size(13.0)
+                                            .size(app.settings.app_name_font_size)
                                             .strong(),
                                     );
                                 });
@@ -255,7 +261,6 @@ type CardActionResult = (
     Option<String>,
 );
 
-/// 単一カードの描画処理を抽出
 fn render_app_card(
     app: &mut LauncherApp,
     ui: &mut egui::Ui,
@@ -275,7 +280,40 @@ fn render_app_card(
         .unwrap_or(false);
     let is_being_dragged = app.dragging_idx == Some(idx);
 
-    let card_height = 60.0;
+    // --- ボタンサイズの自動計算（文字サイズ＋余白） ---
+    let btn_font = egui::FontId::proportional(app.settings.button_font_size);
+    let pad_x = (app.settings.button_font_size * 0.7).max(8.0);
+    let pad_y = 5.0;
+
+    let calc_btn_size = |text: &str| -> egui::Vec2 {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(text.to_string(), btn_font.clone(), egui::Color32::WHITE);
+        egui::vec2(
+            galley.size().x + pad_x * 2.0,
+            (galley.size().y + pad_y * 2.0).max(26.0),
+        )
+    };
+
+    let del_btn_size = calc_btn_size("削除");
+    let rename_btn_size = calc_btn_size("名前変更");
+    let location_btn_size = calc_btn_size("フォルダ");
+    let max_btn_h = del_btn_size
+        .y
+        .max(rename_btn_size.y)
+        .max(location_btn_size.y);
+
+    // --- カードの高さの自動調整 ---
+    let text_block_h = app.settings.app_name_font_size + app.settings.app_path_font_size + 6.0;
+    let icon_size =
+        (app.settings.app_name_font_size + app.settings.app_path_font_size + 4.0).clamp(32.0, 48.0);
+    let content_h = text_block_h.max(icon_size).max(if app.settings.edit_mode {
+        max_btn_h
+    } else {
+        0.0
+    });
+    let card_height = content_h + 20.0; // 上下余白各10px
+
     let desired_size = egui::vec2(ui.available_width(), card_height);
     let sense = if app.settings.edit_mode {
         egui::Sense::click_and_drag()
@@ -285,27 +323,25 @@ fn render_app_card(
 
     let (card_rect, card_response) = ui.allocate_exact_size(desired_size, sense);
 
-    let del_btn_size = egui::vec2(54.0, 28.0);
-    let rename_btn_size = egui::vec2(66.0, 28.0);
-    let location_btn_size = egui::vec2(60.0, 28.0);
-
+    // ボタンの動的配置
+    let btn_spacing = 6.0;
     let del_rect = egui::Rect::from_center_size(
         egui::pos2(
-            card_rect.right() - 16.0 - del_btn_size.x * 0.5,
+            card_rect.right() - 14.0 - del_btn_size.x * 0.5,
             card_rect.center().y,
         ),
         del_btn_size,
     );
     let rename_rect = egui::Rect::from_center_size(
         egui::pos2(
-            del_rect.left() - 6.0 - rename_btn_size.x * 0.5,
+            del_rect.left() - btn_spacing - rename_btn_size.x * 0.5,
             card_rect.center().y,
         ),
         rename_btn_size,
     );
     let location_rect = egui::Rect::from_center_size(
         egui::pos2(
-            rename_rect.left() - 6.0 - location_btn_size.x * 0.5,
+            rename_rect.left() - btn_spacing - location_btn_size.x * 0.5,
             card_rect.center().y,
         ),
         location_btn_size,
@@ -366,10 +402,9 @@ fn render_app_card(
     }
 
     // アイコン描画
-    let icon_size = 34.0;
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
-            card_rect.left() + 16.0 + icon_size * 0.5,
+            card_rect.left() + 14.0 + icon_size * 0.5,
             card_rect.center().y,
         ),
         egui::vec2(icon_size, icon_size),
@@ -416,18 +451,23 @@ fn render_app_card(
             icon_rect.center(),
             egui::Align2::CENTER_CENTER,
             initial,
-            egui::FontId::proportional(16.0),
+            egui::FontId::proportional(icon_size * 0.45),
             theme::TEXT_MUTED,
         );
     }
 
     // テキスト描画
-    let buttons_width = if app.settings.edit_mode { 205.0 } else { 32.0 };
-    let text_start_x = card_rect.left() + 16.0 + icon_size + 14.0;
-    let text_max_w = card_rect.right() - buttons_width - text_start_x;
+    let buttons_total_w = if app.settings.edit_mode {
+        del_btn_size.x + rename_btn_size.x + location_btn_size.x + btn_spacing * 2.0 + 24.0
+    } else {
+        16.0
+    };
+    let text_start_x = icon_rect.right() + 12.0;
+    let text_max_w = (card_rect.right() - buttons_total_w - text_start_x).max(20.0);
 
+    let text_top = card_rect.center().y - text_block_h * 0.5;
     let name_font = egui::FontId::proportional(app.settings.app_name_font_size);
-    let name_pos = egui::pos2(text_start_x, card_rect.top() + 11.0);
+    let name_pos = egui::pos2(text_start_x, text_top);
 
     if !file_exists {
         ui.painter().text(
@@ -462,7 +502,7 @@ fn render_app_card(
     let path_font = egui::FontId::proportional(app.settings.app_path_font_size);
     let path_pos = egui::pos2(
         text_start_x,
-        card_rect.top() + 11.0 + app.settings.app_name_font_size + 4.0,
+        text_top + app.settings.app_name_font_size + 4.0,
     );
 
     let mut display_path = target_app.path.clone();
@@ -506,10 +546,13 @@ fn render_app_card(
             ui,
             location_rect,
             ui.id().with(("location_btn", idx)),
-            "フォルダ",
-            theme::BTN_GRAY_BG,
-            theme::BTN_GRAY_FG,
-            true,
+            CustomButtonProps {
+                text: "フォルダ",
+                font_size: app.settings.button_font_size,
+                bg_color: theme::BTN_GRAY_BG,
+                text_color: theme::BTN_GRAY_FG,
+                enabled: true,
+            },
         )
         .on_hover_text("ファイルの保存先フォルダを開く")
         .clicked()
@@ -521,10 +564,13 @@ fn render_app_card(
             ui,
             rename_rect,
             ui.id().with(("rename_btn", idx)),
-            "名前変更",
-            theme::BTN_BLUE,
-            egui::Color32::WHITE,
-            true,
+            CustomButtonProps {
+                text: "名前変更",
+                font_size: app.settings.button_font_size,
+                bg_color: theme::BTN_BLUE,
+                text_color: egui::Color32::WHITE,
+                enabled: true,
+            },
         )
         .on_hover_text("登録名を変更")
         .clicked()
@@ -536,10 +582,13 @@ fn render_app_card(
             ui,
             del_rect,
             ui.id().with(("del_btn", idx)),
-            "削除",
-            theme::BTN_RED,
-            egui::Color32::WHITE,
-            true,
+            CustomButtonProps {
+                text: "削除",
+                font_size: app.settings.button_font_size,
+                bg_color: theme::BTN_RED,
+                text_color: egui::Color32::WHITE,
+                enabled: true,
+            },
         )
         .on_hover_text("一覧から削除")
         .clicked()

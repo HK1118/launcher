@@ -8,16 +8,20 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
     let mut settings_changed = false;
 
     ui.horizontal(|ui| {
+        let pad_x = (app.settings.button_font_size * 0.8).max(10.0);
+        let pad_y = 6.0;
+        ui.spacing_mut().button_padding = egui::vec2(pad_x, pad_y);
+
         let back_btn = egui::Button::new(
             egui::RichText::new("← 戻る")
                 .color(theme::TEXT_PRIMARY)
-                .size(13.0),
+                .size(app.settings.button_font_size),
         )
         .fill(theme::BTN_GRAY_BG)
         .corner_radius(4.0);
 
         if ui
-            .add_sized(egui::vec2(72.0, 30.0), back_btn)
+            .add(back_btn)
             .on_hover_text("ランチャー一覧画面に戻る (Esc)")
             .clicked()
         {
@@ -29,7 +33,7 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
         ui.heading(
             egui::RichText::new("設定")
                 .color(theme::TEXT_PRIMARY)
-                .size(22.0)
+                .size(app.settings.header_font_size)
                 .strong(),
         );
     });
@@ -56,7 +60,7 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
             // --- セクション1: 全般設定 ---
             ui.label(
                 egui::RichText::new("全般設定")
-                    .size(16.0)
+                    .size(app.settings.ui_font_size + 3.0)
                     .strong()
                     .color(theme::TEXT_PRIMARY),
             );
@@ -70,23 +74,24 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
             general_frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
-                if ui
-                    .checkbox(
-                        &mut app.settings.confirm_on_delete,
-                        "アプリの削除時に確認ダイアログを表示する",
-                    )
-                    .changed()
-                {
+                let chk = egui::Checkbox::new(
+                    &mut app.settings.confirm_on_delete,
+                    egui::RichText::new("アプリの削除時に確認ダイアログを表示する")
+                        .size(app.settings.ui_font_size),
+                );
+                if ui.add(chk).changed() {
                     settings_changed = true;
                 }
 
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    ui.label("連続起動クールダウン:");
+                    ui.label(
+                        egui::RichText::new("連続起動クールダウン:")
+                            .size(app.settings.ui_font_size),
+                    );
                     if ui
-                        .add_sized(
-                            egui::vec2(80.0, 26.0),
+                        .add(
                             egui::DragValue::new(&mut app.settings.launch_cooldown_secs)
                                 .range(0..=3600)
                                 .suffix(" 秒"),
@@ -101,15 +106,15 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
                     egui::RichText::new(
                         "※ 同じアプリを誤って連打・多重起動するのを防止する待機時間です。",
                     )
-                    .size(11.0)
+                    .size(app.settings.ui_font_size.max(11.0) - 2.0)
                     .color(theme::TEXT_MUTED),
                 );
             });
 
             // --- セクション2: 外観・フォント設定 ---
             ui.label(
-                egui::RichText::new("外観・フォントサイズ")
-                    .size(16.0)
+                egui::RichText::new("フォントサイズ設定")
+                    .size(app.settings.ui_font_size + 3.0)
                     .strong()
                     .color(theme::TEXT_PRIMARY),
             );
@@ -123,46 +128,105 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
             font_frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
-                ui.horizontal(|ui| {
-                    ui.label("アプリ名の文字サイズ:");
-                    if ui
-                        .add_sized(
-                            egui::vec2(80.0, 26.0),
-                            egui::DragValue::new(&mut app.settings.app_name_font_size)
-                                .speed(0.5)
-                                .range(1.0..=100.0)
-                                .suffix(" px"),
-                        )
-                        .on_hover_text("クリックして直接キーボード入力、またはドラッグで変更")
-                        .changed()
-                    {
-                        settings_changed = true;
-                    }
-                });
-
-                ui.add_space(6.0);
-
-                ui.horizontal(|ui| {
-                    ui.label("ファイルパスの文字サイズ:");
-                    if ui
-                        .add_sized(
-                            egui::vec2(80.0, 26.0),
-                            egui::DragValue::new(&mut app.settings.app_path_font_size)
-                                .speed(0.5)
-                                .range(1.0..=100.0)
-                                .suffix(" px"),
+                egui::Grid::new("font_settings_grid")
+                    .num_columns(2)
+                    .spacing([16.0, 10.0])
+                    .show(ui, |ui| {
+                        // アプリ名
+                        ui.label(
+                            egui::RichText::new("アプリ名の文字サイズ:")
+                                .size(app.settings.ui_font_size),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut app.settings.app_name_font_size)
+                                    .speed(0.5)
+                                    .range(8.0..=50.0)
+                                    .suffix(" px"),
                             )
-                            .on_hover_text("クリックして直接キーボード入力、またはドラッグで変更")
                             .changed()
                         {
                             settings_changed = true;
                         }
-                });
+                        ui.end_row();
 
-                ui.add_space(10.0);
+                        // ファイルパス
+                        ui.label(
+                            egui::RichText::new("ファイルパスの文字サイズ:")
+                                .size(app.settings.ui_font_size),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut app.settings.app_path_font_size)
+                                    .speed(0.5)
+                                    .range(8.0..=40.0)
+                                    .suffix(" px"),
+                            )
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+                        ui.end_row();
+
+                        // ボタン
+                        ui.label(
+                            egui::RichText::new("ボタンの文字サイズ:")
+                                .size(app.settings.ui_font_size),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut app.settings.button_font_size)
+                                    .speed(0.5)
+                                    .range(8.0..=40.0)
+                                    .suffix(" px"),
+                            )
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+                        ui.end_row();
+
+                        // ヘッダー
+                        ui.label(
+                            egui::RichText::new("ヘッダー見出しの文字サイズ:")
+                                .size(app.settings.ui_font_size),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut app.settings.header_font_size)
+                                    .speed(0.5)
+                                    .range(12.0..=50.0)
+                                    .suffix(" px"),
+                            )
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+                        ui.end_row();
+
+                        // 一般UI
+                        ui.label(
+                            egui::RichText::new("一般テキスト・説明文の文字サイズ:")
+                                .size(app.settings.ui_font_size),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut app.settings.ui_font_size)
+                                    .speed(0.5)
+                                    .range(8.0..=30.0)
+                                    .suffix(" px"),
+                            )
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+                        ui.end_row();
+                    });
+
+                ui.add_space(12.0);
                 ui.label(
                     egui::RichText::new("表示サンプルプレビュー:")
-                        .size(12.0)
+                        .size(app.settings.ui_font_size - 1.0)
                         .color(theme::TEXT_MUTED),
                 );
 
@@ -175,8 +239,14 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
                 preview_frame.show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        let (icon_rect, _) =
-                            ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+                        let icon_size = (app.settings.app_name_font_size
+                            + app.settings.app_path_font_size
+                            + 4.0)
+                            .clamp(32.0, 48.0);
+                        let (icon_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(icon_size, icon_size),
+                            egui::Sense::hover(),
+                        );
                         ui.painter().rect(
                             icon_rect,
                             6.0,
@@ -188,7 +258,7 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
                             icon_rect.center(),
                             egui::Align2::CENTER_CENTER,
                             "S",
-                            egui::FontId::proportional(16.0),
+                            egui::FontId::proportional(icon_size * 0.45),
                             theme::TEXT_MUTED,
                         );
 
@@ -206,6 +276,17 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
                                     .color(theme::TEXT_MUTED),
                             );
                         });
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let _ = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new("削除")
+                                        .size(app.settings.button_font_size)
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(theme::BTN_RED),
+                            );
+                        });
                     });
                 });
             });
@@ -213,7 +294,7 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
             // --- セクション3: 設定・データファイルの管理 ---
             ui.label(
                 egui::RichText::new("設定ファイル・データ管理")
-                    .size(16.0)
+                    .size(app.settings.ui_font_size + 3.0)
                     .strong()
                     .color(theme::TEXT_PRIMARY),
             );
@@ -228,8 +309,8 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
                 ui.set_width(ui.available_width());
 
                 ui.label(
-                    egui::RichText::new("設定やアプリ情報はJSONファイルとして保存されています。直接テキストエディタで確認・編集することも可能です。")
-                        .size(12.0)
+                    egui::RichText::new("設定やアプリ情報はJSONファイルとして保存されています。")
+                        .size(app.settings.ui_font_size)
                         .color(theme::BTN_GRAY_FG),
                 );
 
@@ -237,10 +318,13 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
 
                 let settings_path = get_data_path("settings.json");
                 let apps_path = get_data_path("apps.json");
-                let btn_size = egui::vec2(240.0, 28.0);
 
+                let open_settings_btn = egui::Button::new(
+                    egui::RichText::new("設定ファイルを開く (settings.json)")
+                        .size(app.settings.button_font_size),
+                );
                 if ui
-                    .add_sized(btn_size, egui::Button::new("設定ファイルを開く (settings.json)"))
+                    .add(open_settings_btn)
                     .on_hover_text("既定のテキストエディタで settings.json を開きます")
                     .clicked()
                 {
@@ -249,8 +333,12 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
 
                 ui.add_space(6.0);
 
+                let open_apps_btn = egui::Button::new(
+                    egui::RichText::new("アプリ一覧を開く (apps.json)")
+                        .size(app.settings.button_font_size),
+                );
                 if ui
-                    .add_sized(btn_size, egui::Button::new("アプリ一覧を開く (apps.json)"))
+                    .add(open_apps_btn)
                     .on_hover_text("既定のテキストエディタで apps.json を開きます")
                     .clicked()
                 {
@@ -259,8 +347,11 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
 
                 ui.add_space(6.0);
 
+                let open_dir_btn = egui::Button::new(
+                    egui::RichText::new("保存先フォルダを開く").size(app.settings.button_font_size),
+                );
                 if ui
-                    .add_sized(btn_size, egui::Button::new("保存先フォルダを開く"))
+                    .add(open_dir_btn)
                     .on_hover_text("設定ファイルがあるフォルダーをエクスプローラーで開きます")
                     .clicked()
                 {
@@ -271,11 +362,13 @@ pub fn render_settings_screen(app: &mut LauncherApp, ui: &mut egui::Ui) {
                 ui.separator();
                 ui.add_space(8.0);
 
+                let reset_btn = egui::Button::new(
+                    egui::RichText::new("設定を初期値に戻す")
+                        .size(app.settings.button_font_size)
+                        .color(theme::TEXT_ERROR),
+                );
                 if ui
-                    .button(
-                        egui::RichText::new("設定を初期値に戻す")
-                            .color(theme::TEXT_ERROR),
-                    )
+                    .add(reset_btn)
                     .on_hover_text("フォントサイズやクールダウンなどを初期状態にリセットします")
                     .clicked()
                 {

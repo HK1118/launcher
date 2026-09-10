@@ -399,20 +399,32 @@ impl eframe::App for LauncherApp {
         }
         self.last_window_focused = is_focused;
 
-        // メイン画面での外部ファイルドロップ受付
+        // メイン画面での外部ファイルドロップ受付（編集モード中のみ受け付ける）
         if self.current_screen == CurrentScreen::Launcher {
-            ui.ctx().input(|i| {
-                if !i.raw.dropped_files.is_empty() {
-                    let paths: Vec<PathBuf> = i
-                        .raw
-                        .dropped_files
-                        .iter()
-                        .map(|d| d.path().to_path_buf())
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .collect();
-                    self.add_paths(&paths);
+            if self.settings.edit_mode {
+                ui.ctx().input(|i| {
+                    if !i.raw.dropped_files.is_empty() {
+                        let paths: Vec<PathBuf> = i
+                            .raw
+                            .dropped_files
+                            .iter()
+                            .map(|d| d.path().to_path_buf())
+                            .filter(|p| !p.as_os_str().is_empty())
+                            .collect();
+                        self.add_paths(&paths);
+                    }
+                });
+            } else {
+                // 編集モードがオフのときにドロップされたら案内を表示
+                let has_dropped = ui.ctx().input(|i| !i.raw.dropped_files.is_empty());
+                if has_dropped {
+                    self.toast = Some((
+                        "アプリを追加するには右上の「編集」ボタンを押してください".to_string(),
+                        ToastKind::Info,
+                        Instant::now(),
+                    ));
                 }
-            });
+            }
 
             if self.dragging_idx.is_some() {
                 let scroll_delta_y = ui.input(|i| i.smooth_scroll_delta.y);

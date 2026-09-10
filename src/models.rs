@@ -10,16 +10,15 @@ pub struct SavedApp {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
     pub confirm_on_delete: bool,
-    #[serde(default, alias = "show_edit_buttons")]
     pub edit_mode: bool,
-    pub app_name_font_size: f32,
-    pub app_path_font_size: f32,
-    #[serde(default = "default_cooldown_secs")]
     pub launch_cooldown_secs: u64,
-}
 
-fn default_cooldown_secs() -> u64 {
-    8
+    // 各所フォントサイズ設定
+    pub header_font_size: f32,   // ヘッダー・タイトル (既定: 22.0)
+    pub app_name_font_size: f32, // アプリ名 (既定: 15.0)
+    pub app_path_font_size: f32, // ファイルパス (既定: 12.0)
+    pub button_font_size: f32,   // ボタン内の文字 (既定: 13.0)
+    pub ui_font_size: f32,       // 設定画面や説明文・UI文字 (既定: 13.0)
 }
 
 impl Default for Settings {
@@ -27,9 +26,12 @@ impl Default for Settings {
         Self {
             confirm_on_delete: true,
             edit_mode: false,
+            launch_cooldown_secs: 8,
+            header_font_size: 22.0,
             app_name_font_size: 15.0,
             app_path_font_size: 12.0,
-            launch_cooldown_secs: default_cooldown_secs(),
+            button_font_size: 13.0,
+            ui_font_size: 13.0,
         }
     }
 }
@@ -48,7 +50,6 @@ pub fn get_data_path(file_name: &str) -> PathBuf {
     }
 }
 
-/// 一時ファイルに書き込んでからリネームすることで、破損を防ぐアトミック保存
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -85,7 +86,6 @@ pub fn save_settings(settings: &Settings) {
     let _ = atomic_write_json(&path, settings);
 }
 
-/// 設定ファイルを安全に読み込みます。構文エラー等の破損時は上書きせず警告を返します。
 pub fn load_settings() -> (Settings, Option<String>) {
     let path = get_data_path("settings.json");
     if !path.exists() {
@@ -97,13 +97,11 @@ pub fn load_settings() -> (Settings, Option<String>) {
     match std::fs::read_to_string(&path) {
         Ok(content) => match serde_json::from_str::<Settings>(&content) {
             Ok(settings) => (settings, None),
-            Err(e) => (
-                Settings::default(),
-                Some(format!(
-                    "settings.json 構文エラー（デフォルトで動作）: {}",
-                    e
-                )),
-            ),
+            Err(_) => {
+                let defaults = Settings::default();
+                let _ = atomic_write_json(&path, &defaults);
+                (defaults, None)
+            }
         },
         Err(e) => (
             Settings::default(),
